@@ -1,0 +1,7 @@
+{
+  "name": "群面模拟器",
+  "description": "A professional AI-driven Leaderless Group Discussion simulator that helps candidates practice for group interviews with four distinct AI personalities and real-time pressure simulation.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
