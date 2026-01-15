@@ -9,8 +9,6 @@
 [![Vite](https://img.shields.io/badge/Vite-6.2.0-646CFF?logo=vite)](https://vitejs.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-4.1.18-38B2AC?logo=tailwind-css)](https://tailwindcss.com/)
 
-[在线体验](#) • [功能特性](#-核心功能) • [技术架构](#-技术架构) • [快速开始](#-快速开始)
-
 </div>
 
 ---
@@ -19,10 +17,7 @@
 
 <div align="center">
 
-![产品首页](./screenshots/homepage.png)
-
-*如果图片未显示，请将你的产品首页截图保存为 `screenshots/homepage.png`*
-
+![产品首页](./screenshots/homepage.jpg)
 </div>
 
 ---
