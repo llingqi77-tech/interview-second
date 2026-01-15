@@ -66,7 +66,7 @@ jobs:
       - name: Build with Vite
         env:
           # 从 GitHub Secrets 中获取 API Key
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           # 自动设置 base 路径
           VITE_BASE_PATH: ${{ steps.set-base.outputs.base }}
         run: |
@@ -160,8 +160,10 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
-        # 注意：如果出现 "Resource not accessible by integration" 错误，
-        # 需要先在仓库 Settings → Pages 中手动启用 GitHub Actions 作为部署源
+        # 注意：如果出现 "Get Pages site failed" 错误，
+        # 需要先在仓库 Settings → Pages 中手动启用 GitHub Pages
+        # 并选择 "GitHub Actions" 作为部署源
+        continue-on-error: true
 
       - name: Final verification before upload
         run: |

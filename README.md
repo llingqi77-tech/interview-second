@@ -146,6 +146,18 @@ interview-second-main/
 
 ## 📦 部署
 
+### GitHub Pages 部署
+
+快速部署到 GitHub Pages，免费且简单：
+
+详细部署指南请查看 [GitHub Pages 部署文档](./DEPLOY_GITHUB_PAGES.md)
+
+**快速步骤：**
+1. 在仓库 Settings → Pages 中启用 GitHub Pages
+2. 选择 "GitHub Actions" 作为部署源
+3. 在 Secrets 中添加 `DEEPSEEK_API_KEY`
+4. 推送代码到 `main` 分支，自动部署
+
 ### Vercel 部署（推荐）
 
 详细部署指南请查看 [Vercel 部署文档](./DEPLOY_VERCEL.md)
