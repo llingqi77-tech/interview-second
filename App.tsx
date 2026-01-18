@@ -70,7 +70,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
       <main className="w-full max-w-4xl h-[85vh] flex flex-col">
         {state.status === 'IDLE' && (
-          <div className="flex-1 flex items-center justify-center">
+          <div className="flex-1 flex items-center justify-center w-full">
             <SetupForm onStart={startSimulation} />
           </div>
         )}

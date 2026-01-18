@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Character, Message, SimulationState } from '../types';
-import { CHARACTERS } from '../constants';
+import { CHARACTERS, USER_INFO } from '../constants';
 import { generateAIReply } from '../services/geminiService';
 import CharacterCard from './CharacterCard';
 
@@ -25,22 +25,106 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
   const [isInterrupted, setIsInterrupted] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [showTopic, setShowTopic] = useState(true);
+  const [userClickedMic, setUserClickedMic] = useState(false);
+  const [summaryGuided, setSummaryGuided] = useState(false); // 是否已经引导总结
+  const [summaryVolunteered, setSummaryVolunteered] = useState(false); // 是否有人自荐汇报
+  const [summaryCompleted, setSummaryCompleted] = useState(false); // 是否已经完成总结汇报
+  const [currentPhase, setCurrentPhase] = useState<string>("开局框架阶段"); // 当前阶段，按顺序推进
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const firstTurnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const micCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // 用于平衡 AI 发言占比的洗牌队列
   const aiPoolRef = useRef<string[]>([]);
 
   const MAX_ROUNDS = 25;
 
-  // 动态阶段判断
+  // 阶段定义（按顺序）
+  const PHASES = [
+    "开局框架阶段",
+    "深入讨论与方案贡献",
+    "引导与总结陈词",
+    "最后补充与面试收尾"
+  ];
+
+  // 基于讨论内容动态判断阶段（按顺序推进，不能回退或跳过）
   const getDiscussionPhase = () => {
-    if (round < 5) return "开局框架阶段 (Setting Framework)";
-    if (round < 18) return "深入讨论与方案贡献 (Idea Contribution)";
-    if (round < 22) return "引导与总结陈词 (Guiding Conclusion)";
-    return "最后补充与面试收尾 (Final Supplement)";
+    if (messages.length === 0) {
+      return "开局框架阶段";
+    }
+
+    let newPhase = currentPhase; // 默认保持当前阶段
+
+    // 分析最近的消息内容来判断是否可以推进到下一个阶段
+    const recentMessages = messages.slice(-8); // 分析最近8条消息
+    const allMessages = messages;
+
+    // 根据当前阶段，检查是否可以推进到下一个阶段
+    switch (currentPhase) {
+      case "开局框架阶段":
+        // 检查是否有深入讨论的特征，可以推进到"深入讨论与方案贡献"
+        const deepDiscussionKeywords = ['方案', '可行', '具体', '细节', '实施', '落地', '挑战', '问题', '建议', '观点', '认为', '补充', '分析', '评估', '考虑', '策略', '措施'];
+        const hasDeepDiscussion = recentMessages.some(m => {
+          const content = m.content;
+          return deepDiscussionKeywords.some(keyword => content.includes(keyword)) &&
+                 content.length > 40; // 较长的发言通常表示深入讨论
+        });
+        
+        // 如果有多条消息且检测到深入讨论特征，推进到下一阶段
+        if (messages.length >= 3 && hasDeepDiscussion) {
+          newPhase = "深入讨论与方案贡献";
+        }
+        break;
+
+      case "深入讨论与方案贡献":
+        // 检查是否有人引导总结或自荐汇报，可以推进到"引导与总结陈词"
+        const hasSummaryGuidance = allMessages.some(m => {
+          const content = m.content;
+          return (content.includes('总结') && (content.includes('汇报') || content.includes('谁愿意') || content.includes('谁来'))) ||
+                 content.includes('我来总结') || 
+                 content.includes('我来汇报') ||
+                 content.includes('我来说');
+        });
+
+        // 或者讨论已经比较充分（消息多、参与者多），也可以推进
+        const uniqueSpeakers = new Set(allMessages.map(m => m.senderId));
+        const hasSufficientDiscussion = allMessages.length >= 10 && uniqueSpeakers.size >= 3;
+
+        if (hasSummaryGuidance || hasSufficientDiscussion) {
+          newPhase = "引导与总结陈词";
+        }
+        break;
+
+      case "引导与总结陈词":
+        // 检查是否已经完成总结汇报，可以推进到"最后补充与面试收尾"
+        const hasCompletedSummary = allMessages.some(m => {
+          const content = m.content;
+          return (content.includes('总结') || content.includes('汇报')) && 
+                 content.length > 100 && // 较长的总结内容
+                 (content.includes('第一') || content.includes('第二') || content.includes('第三') || 
+                  content.includes('首先') || content.includes('其次') || content.includes('最后') ||
+                  content.includes('方面') || content.includes('要点') || content.includes('综上所述'));
+        });
+
+        if (hasCompletedSummary) {
+          newPhase = "最后补充与面试收尾";
+        }
+        break;
+
+      case "最后补充与面试收尾":
+        // 已经是最后阶段，不再推进
+        newPhase = "最后补充与面试收尾";
+        break;
+    }
+
+    // 更新当前阶段（如果推进了）
+    if (newPhase !== currentPhase) {
+      setCurrentPhase(newPhase);
+    }
+
+    return newPhase;
   };
 
   useEffect(() => {
@@ -51,6 +135,13 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
       });
     }
   }, [messages, isTyping]);
+
+  // 当消息为空时，重置阶段为开局框架阶段
+  useEffect(() => {
+    if (messages.length === 0) {
+      setCurrentPhase("开局框架阶段");
+    }
+  }, [messages.length]);
 
   // Fix: Set up speech recognition lifecycle handlers to keep isListening state in sync
   useEffect(() => {
@@ -77,17 +168,18 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
       recognitionRef.current = recognition;
     }
 
-    // 自动开局
-    firstTurnTimeoutRef.current = setTimeout(() => {
-      if (messages.length === 0) {
-        // 第一回合随机指定一人，后续进入洗牌逻辑
+    // 5秒倒计时：如果用户没有点击麦克风，AI先发言
+    micCheckTimeoutRef.current = setTimeout(() => {
+      if (messages.length === 0 && !userClickedMic) {
+        // 用户5秒内没有点击麦克风，AI抢先发言
         const char = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)];
         triggerAITurn(char);
       }
-    }, 2500);
+    }, 5000);
 
     return () => {
       if (firstTurnTimeoutRef.current) clearTimeout(firstTurnTimeoutRef.current);
+      if (micCheckTimeoutRef.current) clearTimeout(micCheckTimeoutRef.current);
       if (recognitionRef.current) recognitionRef.current.stop();
     };
   }, []);
@@ -122,6 +214,15 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
     return newMessage;
   };
 
+  // 根据文本长度计算合理的说话时间（人类平均语速：每分钟150-200字，约每秒2.5-3.3字）
+  const calculateSpeakingTime = (text: string): number => {
+    const charCount = text.length;
+    const wordsPerSecond = 2.8; // 每秒约2.8字（取中间值）
+    const baseTime = (charCount / wordsPerSecond) * 1000; // 转换为毫秒
+    // 最小说话时间800ms，最大说话时间5000ms
+    return Math.max(800, Math.min(5000, baseTime));
+  };
+
   const triggerAITurn = async (char: Character) => {
     if (round >= MAX_ROUNDS) return;
 
@@ -130,20 +231,75 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
     setIsTyping(true);
 
     try {
-      const text = await generateAIReply(char, state.topic, state.jobTitle, messages, getDiscussionPhase());
-      setIsTyping(false);
-      addMessage(char.id, char.name, text);
-      setActiveCharId(null);
-
-      // AI 发言后，有一定概率立刻由另一位 AI 响应，增强讨论连贯性
-      const shouldChain = Math.random() < 0.4;
-      if (shouldChain && round < MAX_ROUNDS) {
-        const delay = 1200 + Math.random() * 1800;
-        setTimeout(() => {
-          const nextChar = getBalancedNextSpeaker(char.id);
-          triggerAITurn(nextChar);
-        }, delay);
+      const phase = getDiscussionPhase();
+      const text = await generateAIReply(char, state.topic, state.jobTitle, messages, phase, summaryGuided, summaryVolunteered);
+      
+      // 检查是否是枢纽型引导总结
+      if (char.role === 'STRUCTURED' && phase.includes('总结') && !summaryGuided) {
+        const hasGuidance = text.includes('总结') && (text.includes('汇报') || text.includes('谁愿意') || text.includes('谁来'));
+        if (hasGuidance) {
+          setSummaryGuided(true);
+        }
       }
+      
+      // 检查是否有人自荐汇报
+      if (!summaryVolunteered && (text.includes('我来总结') || text.includes('我来汇报') || text.includes('我来说'))) {
+        setSummaryVolunteered(true);
+      }
+      
+      // 根据文本长度计算合理的说话时间
+      // 如果是总结汇报，给予更多时间（总结通常较长）
+      const isSummaryReport = summaryVolunteered && (text.length > 100 || text.includes('总结') || text.includes('汇报'));
+      const baseSpeakingTime = calculateSpeakingTime(text);
+      const speakingTime = isSummaryReport ? baseSpeakingTime * 1.5 : baseSpeakingTime;
+      
+      // 等待说话时间，然后显示消息
+      setTimeout(() => {
+        setIsTyping(false);
+        addMessage(char.id, char.name, text);
+        setActiveCharId(null);
+        
+        // 如果完成了总结汇报，标记为完成
+        if (summaryVolunteered && text.length > 100) {
+          setSummaryCompleted(true);
+        }
+
+        // AI 发言后的响应逻辑
+        // 检查上一个发言者是谁
+        const lastMessage = messages[messages.length - 1];
+        const isUserLastSpeaker = lastMessage && lastMessage.senderId === 'user';
+        
+        if (isUserLastSpeaker) {
+          // 如果上一个发言者是用户，AI必须回应（100%概率）
+          // 但当前AI已经发言了，所以不需要再触发
+          // 这个逻辑已经在用户发言后的handleSendMessage中处理了
+        } else {
+          // 如果枢纽型引导了总结，下一个发言者应该自荐汇报
+          if (summaryGuided && !summaryVolunteered) {
+            // 枢纽型引导后，下一个发言者（可以是用户或AI）应该自荐汇报
+            // 如果用户没有发言，AI会在后续自动发言时自荐
+            // 这里给一个较短的延迟，让AI有机会自荐
+            const delay = 1500 + Math.random() * 1000;
+            setTimeout(() => {
+              const nextChar = getBalancedNextSpeaker(char.id);
+              triggerAITurn(nextChar);
+            }, delay);
+          } else {
+            // 如果上一个发言者是AI，有一定概率由另一位AI响应
+            const shouldChain = Math.random() < 0.3; // 降低AI之间的连续对话概率
+            if (shouldChain && round < MAX_ROUNDS) {
+              // 添加合理的间隔：最小1.5秒，最大3秒，避免连续快速发言
+              const minInterval = 1500;
+              const maxInterval = 3000;
+              const delay = minInterval + Math.random() * (maxInterval - minInterval);
+              setTimeout(() => {
+                const nextChar = getBalancedNextSpeaker(char.id);
+                triggerAITurn(nextChar);
+              }, delay);
+            }
+          }
+        }
+      }, speakingTime);
     } catch (e) {
       console.error(e);
       setIsTyping(false);
@@ -160,6 +316,21 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
     if (isListening) {
       recognitionRef.current.stop();
     } else {
+      // 标记用户点击了麦克风
+      if (!userClickedMic) {
+        setUserClickedMic(true);
+        // 清除5秒倒计时，用户先发言
+        if (micCheckTimeoutRef.current) {
+          clearTimeout(micCheckTimeoutRef.current);
+          micCheckTimeoutRef.current = null;
+        }
+      }
+      
+      // 抢话判定：如果AI正在说话中，用户点击麦克风开始录音，判定为抢话
+      if (isTyping && activeCharId) {
+        setIsInterrupted(true);
+        setTimeout(() => setIsInterrupted(false), 2500);
+      }
       try {
         recognitionRef.current.start();
       } catch (err) {
@@ -171,20 +342,47 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
   const handleSendMessage = () => {
     if (!inputValue.trim()) return;
     
-    // 如果在 AI 发言时强制插入，视为抢话
-    if (isTyping || activeCharId) {
+    // 标记用户已经发言（无论是通过语音还是输入框）
+    if (!userClickedMic) {
+      setUserClickedMic(true);
+      // 清除5秒倒计时
+      if (micCheckTimeoutRef.current) {
+        clearTimeout(micCheckTimeoutRef.current);
+        micCheckTimeoutRef.current = null;
+      }
+    }
+    
+    // 抢话判定：只有在AI显示"说话中"（isTyping && activeCharId）且用户通过语音识别发言时才判定为抢话
+    if (isTyping && activeCharId && isListening) {
       setIsInterrupted(true);
       setTimeout(() => setIsInterrupted(false), 2500);
     }
 
-    addMessage('user', '你', inputValue);
+    const messageContent = inputValue.trim();
+    addMessage('user', USER_INFO.name, messageContent);
     setInputValue("");
     
-    // 用户发言后，1-2秒后会有 AI 接话
+    // 检查用户是否自荐汇报
+    if (!summaryVolunteered && (messageContent.includes('我来总结') || messageContent.includes('我来汇报') || messageContent.includes('我来说') || messageContent.includes('我来'))) {
+      setSummaryVolunteered(true);
+    }
+    
+    // 用户发言后，必须确保有AI回应（强制响应，确保互动）
+    // 根据用户发言长度计算合理的等待时间，让AI在用户说完后自然回应
+    const userMessageLength = messageContent.length;
+    const userSpeakingTime = Math.max(800, Math.min(4000, (userMessageLength / 2.8) * 1000));
+    
+    // 如果用户自荐了汇报，AI应该等待或补充，延迟稍长
+    const isUserVolunteered = summaryVolunteered && (messageContent.includes('我来总结') || messageContent.includes('我来汇报'));
+    const responseDelay = isUserVolunteered 
+      ? userSpeakingTime + 2000 + Math.random() * 1000  // 用户汇报后，AI稍等再补充
+      : userSpeakingTime + 1000 + Math.random() * 1000; // 正常回应时间
+    
     setTimeout(() => {
+      // 优先选择能回应用户的AI，确保互动
       const nextChar = getBalancedNextSpeaker('user');
       triggerAITurn(nextChar);
-    }, 1500 + Math.random() * 1000);
+    }, responseDelay);
   };
 
   return (
@@ -206,7 +404,7 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
                   <div className="h-1 w-32 bg-slate-100 rounded-full overflow-hidden mt-1">
                     <div className="h-full bg-indigo-500 transition-all duration-500" style={{ width: `${(round / MAX_ROUNDS) * 100}%` }}></div>
                   </div>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase mt-1">进度 {round}/{MAX_ROUNDS}</span>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase mt-1">进度</span>
                 </div>
               </div>
             </div>
@@ -223,8 +421,8 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
               <CharacterCard key={c.id} character={c} isActive={activeCharId === c.id} isTyping={activeCharId === c.id && isTyping} />
             ))}
             <div className="flex flex-col items-center p-3 rounded-xl bg-white shadow-sm border-2 border-slate-100 min-w-[85px]">
-               <div className="w-12 h-12 rounded-full border-2 border-slate-300 flex items-center justify-center bg-slate-50 text-slate-400 font-bold text-xs uppercase">User</div>
-               <span className="mt-2 text-[10px] font-bold text-slate-700">我 (考生)</span>
+               <img src={USER_INFO.avatar} alt={USER_INFO.name} className="w-12 h-12 rounded-full border-2 border-indigo-300" />
+               <span className="mt-2 text-[10px] font-bold text-slate-700">{USER_INFO.displayName}</span>
             </div>
           </div>
         </div>
@@ -253,7 +451,7 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
             <div className="flex justify-start">
               <div className="bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-sm flex items-center gap-3">
                 <div className="typing-indicator flex space-x-1"><span></span><span></span><span></span></div>
-                <span className="text-[11px] font-bold text-slate-400">正在思考发言...</span>
+                <span className="text-[11px] font-bold text-slate-400">说话中</span>
               </div>
             </div>
           )}
@@ -316,7 +514,7 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
                 <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10.392A7.968 7.968 0 015.5 14c1.255 0 2.443.29 3.5.804V4.804zM11 4.804A7.968 7.968 0 0114.5 4c1.255 0 2.443.29 3.5.804v10.392a7.968 7.968 0 00-3.5-.804c-1.255 0-2.443.29-3.5.804V4.804z" />
               </svg>
             </div>
-            <h3 className="text-lg font-black text-slate-900 tracking-tight">群面真题材料</h3>
+            <h3 className="text-lg font-black text-slate-900 tracking-tight">题目</h3>
           </div>
           
           <div className="flex-1 overflow-y-auto pr-3 scrollbar-hide space-y-8">

@@ -37,50 +37,54 @@ const SetupForm: React.FC<SetupFormProps> = ({ onStart }) => {
   };
 
   return (
-    <div className="max-w-3xl mx-auto p-8 bg-white rounded-3xl shadow-2xl border border-slate-100">
-      <div className="text-center mb-10">
-        <h1 className="text-4xl font-black text-slate-900 mb-3 tracking-tight">群面模拟器</h1>
-        <p className="text-slate-500 text-base">专业、高压、实战。模拟互联网大厂群面环境。</p>
+    <div className="w-full max-w-7xl mx-auto bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col" style={{ height: 'calc(100vh - 2rem)' }}>
+      {/* 顶部：标题区域，覆盖整个宽度 */}
+      <div className="flex-shrink-0 px-8 pt-8 pb-4">
+        <div className="text-center">
+          <h1 className="text-4xl font-black text-slate-900 mb-3 tracking-tight">群面模拟器</h1>
+          <p className="text-slate-500 text-base">专业、高压、实战。模拟大厂群面环境。</p>
+        </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="group">
-            <label className="block text-sm font-bold text-slate-700 mb-2 transition-colors group-focus-within:text-indigo-600">面试公司</label>
-            <input 
-              type="text" 
-              value={company}
-              onChange={(e) => setCompany(e.target.value)}
-              placeholder="例如：字节跳动"
-              className="w-full px-5 py-4 rounded-2xl border border-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none transition-all text-slate-900 bg-slate-50 font-medium placeholder:text-slate-400"
-              required
-            />
-          </div>
-          <div className="group">
-            <label className="block text-sm font-bold text-slate-700 mb-2 transition-colors group-focus-within:text-indigo-600">面试岗位</label>
-            <input 
-              type="text" 
-              value={jobTitle}
-              onChange={(e) => setJobTitle(e.target.value)}
-              placeholder="例如：产品经理"
-              className="w-full px-5 py-4 rounded-2xl border border-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none transition-all text-slate-900 bg-slate-50 font-medium placeholder:text-slate-400"
-              required
-            />
-          </div>
-        </div>
-
-        <div className="relative">
-          <div className="flex justify-between items-end mb-3">
-            <label className="block text-sm font-bold text-slate-700">群面讨论题目</label>
+      {/* 主要内容区域：左右布局 */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* 左侧：表单输入区域 */}
+        <div className="w-96 flex-shrink-0 p-8 pt-4 flex flex-col">
+          <form onSubmit={handleSubmit} className="flex-1 flex flex-col space-y-6">
+            <div className="space-y-6">
+              <div className="group">
+                <label className="block text-sm font-bold text-slate-700 mb-2 transition-colors group-focus-within:text-indigo-600">面试公司</label>
+                <input 
+                  type="text" 
+                  value={company}
+                  onChange={(e) => setCompany(e.target.value)}
+                  placeholder="例如：字节跳动"
+                  className="w-full px-5 py-4 rounded-2xl border border-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none transition-all text-slate-900 bg-slate-50 font-medium placeholder:text-slate-400"
+                  required
+                />
+              </div>
+              <div className="group">
+                <label className="block text-sm font-bold text-slate-700 mb-2 transition-colors group-focus-within:text-indigo-600">面试岗位</label>
+                <input 
+                  type="text" 
+                  value={jobTitle}
+                  onChange={(e) => setJobTitle(e.target.value)}
+                  placeholder="例如：产品经理"
+                  className="w-full px-5 py-4 rounded-2xl border border-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none transition-all text-slate-900 bg-slate-50 font-medium placeholder:text-slate-400"
+                  required
+                />
+              </div>
+            </div>
+            
             <button
               type="button"
               onClick={handleGenerate}
               disabled={isGenerating || !company || !jobTitle}
-              className="px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl text-xs font-bold hover:bg-indigo-100 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full px-5 py-3 bg-slate-900 text-white rounded-xl text-sm font-black hover:bg-indigo-600 shadow-lg shadow-slate-200 transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-slate-900"
             >
               {isGenerating ? (
                 <>
-                  <svg className="animate-spin h-3 w-3 text-indigo-600" viewBox="0 0 24 24">
+                  <svg className="animate-spin h-3 w-3 text-white" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
@@ -96,14 +100,21 @@ const SetupForm: React.FC<SetupFormProps> = ({ onStart }) => {
                 </>
               )}
             </button>
+          </form>
+        </div>
+
+        {/* 右侧：题目显示区域 */}
+        <div className="flex-1 flex flex-col p-8 pt-4 overflow-hidden">
+          <div className="mb-3">
+            <label className="block text-sm font-bold text-slate-700">群面讨论题目</label>
           </div>
           
-          <div className={`relative rounded-3xl overflow-hidden border-2 transition-all ${topic ? 'border-indigo-200 bg-white shadow-inner' : 'border-slate-100 bg-slate-50'}`}>
+          <div className={`relative rounded-3xl overflow-hidden border-2 transition-all flex-1 flex flex-col ${topic ? 'border-indigo-200 bg-white shadow-inner' : 'border-slate-100 bg-slate-50'}`}>
             <textarea 
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               placeholder="填写题目内容，或者点击上方按钮让 AI 结合公司与岗位为你设计一个经典群面题目..."
-              className="w-full px-6 py-6 text-slate-900 bg-transparent focus:outline-none transition-all h-64 md:h-80 resize-none text-base leading-relaxed font-medium placeholder:text-slate-400"
+              className="w-full h-full px-6 py-6 text-slate-900 bg-transparent focus:outline-none transition-all resize-none text-base leading-relaxed font-medium placeholder:text-slate-400"
               required
             />
             {isGenerating && (
@@ -116,18 +127,23 @@ const SetupForm: React.FC<SetupFormProps> = ({ onStart }) => {
             )}
           </div>
         </div>
+      </div>
 
-        <button 
-          type="submit"
-          className="w-full bg-slate-900 text-white font-black py-5 rounded-2xl hover:bg-indigo-600 shadow-2xl shadow-slate-200 transition-all active:scale-[0.98] text-lg tracking-wide uppercase"
-        >
-          确认题目 · 开始模拟
-        </button>
-      </form>
-      
-      <p className="mt-8 text-center text-slate-400 text-xs">
-        模拟器将为您生成 4 位各具特色的 AI 讨论伙伴，并记录您的表现生成详细反馈。
-      </p>
+      {/* 底部：按钮和提示文字，覆盖整个宽度 */}
+      <div className="flex-shrink-0 px-8 pb-8">
+        <form onSubmit={handleSubmit}>
+          <button 
+            type="submit"
+            className="w-full bg-slate-900 text-white font-black py-3 rounded-2xl hover:bg-indigo-600 shadow-lg shadow-slate-200 transition-all active:scale-[0.98] text-base tracking-wide uppercase"
+          >
+            确认题目 · 开始模拟
+          </button>
+        </form>
+        
+        <p className="mt-4 text-center text-slate-400 text-xs">
+          模拟器将为您生成 3 位各具特色的 AI 讨论伙伴，并记录您的表现生成详细反馈。
+        </p>
+      </div>
     </div>
   );
 };
