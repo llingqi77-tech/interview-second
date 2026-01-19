@@ -30,6 +30,11 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
   const [summaryVolunteered, setSummaryVolunteered] = useState(false); // 是否有人自荐汇报
   const [summaryCompleted, setSummaryCompleted] = useState(false); // 是否已经完成总结汇报
   const [currentPhase, setCurrentPhase] = useState<string>("开局框架阶段"); // 当前阶段，按顺序推进
+  const [lastUserMessageTime, setLastUserMessageTime] = useState<number | null>(null); // 用户上一次发言的时间戳
+  const [aiResponseCountAfterUser, setAiResponseCountAfterUser] = useState<number>(0); // 用户发言后AI的发言次数
+  const [maxAiResponseCount, setMaxAiResponseCount] = useState<number>(0); // 本次用户发言后允许的最大AI发言次数
+  const [currentKeyPointIndex, setCurrentKeyPointIndex] = useState<number>(0); // 当前讨论的核心要点索引
+  const [keyPointDiscussionCount, setKeyPointDiscussionCount] = useState<number>(0); // 当前要点的讨论次数（AI+用户）
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -38,8 +43,19 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
   
   // 用于平衡 AI 发言占比的洗牌队列
   const aiPoolRef = useRef<string[]>([]);
+  
+  // 用于跟踪用户发言后的AI发言次数
+  const userMessageTimeRef = useRef<number | null>(null);
+  const maxAiResponseCountRef = useRef<number>(0);
+  const aiResponseCountRef = useRef<number>(0);
+  
+  // 用于跟踪核心要点的讨论状态
+  const keyPointsRef = useRef<string[]>([]); // 核心要点列表
+  const currentKeyPointIndexRef = useRef<number>(0); // 当前讨论的核心要点索引
+  const keyPointDiscussionCountRef = useRef<number>(0); // 当前要点的讨论次数
 
   const MAX_ROUNDS = 25;
+  const MAX_DISCUSSIONS_PER_KEY_POINT = 10; // 每个要点的最大讨论次数（AI+用户）
 
   // 阶段定义（按顺序）
   const PHASES = [
@@ -48,11 +64,60 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
     "引导与总结陈词",
     "最后补充与面试收尾"
   ];
+  
+  // 提取核心要点的函数
+  const extractKeyPoints = (topicText: string): string[] => {
+    const keyPoints: string[] = [];
+    
+    // 查找"核心要点"或"要点"部分
+    const pointsMatch = topicText.match(/核心要点[：:]\s*([\s\S]*?)(?=\n\n|\n三、|$)/);
+    if (pointsMatch) {
+      const pointsText = pointsMatch[1];
+      // 匹配数字开头的要点，如"1、用户行为与竞品分析"
+      const pointRegex = /\d+[、.]\s*([^0-9\n]+)/g;
+      let match;
+      while ((match = pointRegex.exec(pointsText)) !== null) {
+        const point = match[1].trim();
+        // 如果要点包含"与"或"和"，不拆分，保留完整要点
+        keyPoints.push(point);
+      }
+    }
+    
+    // 如果没有找到，尝试查找"问题"部分
+    if (keyPoints.length === 0) {
+      const problemMatch = topicText.match(/问题[：:]\s*([\s\S]*?)(?=\n\n|\n三、|$)/);
+      if (problemMatch) {
+        const problemText = problemMatch[1];
+        const pointRegex = /\d+[、.]\s*([^0-9\n]+)/g;
+        let match;
+        while ((match = pointRegex.exec(problemText)) !== null) {
+          const point = match[1].trim();
+          keyPoints.push(point);
+        }
+      }
+    }
+    
+    return keyPoints;
+  };
+  
+  // 初始化核心要点
+  useEffect(() => {
+    if (state.topic && keyPointsRef.current.length === 0) {
+      const points = extractKeyPoints(state.topic);
+      keyPointsRef.current = points;
+      currentKeyPointIndexRef.current = 0;
+      keyPointDiscussionCountRef.current = 0;
+      setCurrentKeyPointIndex(0);
+      setKeyPointDiscussionCount(0);
+    }
+  }, [state.topic]);
 
   // 基于讨论内容动态判断阶段（按顺序推进，不能回退或跳过）
-  const getDiscussionPhase = () => {
+  // 使用 useEffect 来更新阶段，确保状态同步
+  useEffect(() => {
     if (messages.length === 0) {
-      return "开局框架阶段";
+      setCurrentPhase("开局框架阶段");
+      return;
     }
 
     let newPhase = currentPhase; // 默认保持当前阶段
@@ -123,8 +188,11 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
     if (newPhase !== currentPhase) {
       setCurrentPhase(newPhase);
     }
+  }, [messages, currentPhase]);
 
-    return newPhase;
+  // 获取当前阶段（用于显示和传递给AI）
+  const getDiscussionPhase = () => {
+    return currentPhase;
   };
 
   useEffect(() => {
@@ -173,7 +241,7 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
       if (messages.length === 0 && !userClickedMic) {
         // 用户5秒内没有点击麦克风，AI抢先发言
         const char = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)];
-        triggerAITurn(char);
+        triggerAITurn(char, 0);
       }
     }, 5000);
 
@@ -211,6 +279,13 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
       type: 'message'
     };
     setMessages(prev => [...prev, newMessage]);
+    
+    // 更新当前要点的讨论计数（AI+用户都算）
+    if (keyPointsRef.current.length > 0 && currentKeyPointIndexRef.current < keyPointsRef.current.length) {
+      keyPointDiscussionCountRef.current += 1;
+      setKeyPointDiscussionCount(keyPointDiscussionCountRef.current);
+    }
+    
     return newMessage;
   };
 
@@ -223,16 +298,59 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
     return Math.max(800, Math.min(5000, baseTime));
   };
 
-  const triggerAITurn = async (char: Character) => {
+  const triggerAITurn = async (char: Character, maxCount: number = 0, userMessageTime: number | null = null) => {
     if (round >= MAX_ROUNDS) return;
+    
+    // 检查用户发言后的AI发言次数
+    // 如果提供了用户发言时间，检查从该时间到现在AI已经发言了多少次
+    let currentAiCount = 0;
+    if (userMessageTime !== null) {
+      // 计算从用户发言时间到现在，AI已经发言了多少次
+      currentAiCount = messages.filter(m => 
+        parseInt(m.id) > userMessageTime && m.senderId !== 'user'
+      ).length;
+    } else {
+      // 如果没有提供用户发言时间，使用状态中的计数
+      currentAiCount = aiResponseCountAfterUser;
+    }
+    
+    // 如果已经达到最大次数，不再继续
+    if (maxCount > 0 && currentAiCount >= maxCount) {
+      return;
+    }
 
     setRound(prev => prev + 1);
     setActiveCharId(char.id);
     setIsTyping(true);
+    
+    // 更新AI发言计数
+    if (userMessageTime !== null) {
+      setAiResponseCountAfterUser(currentAiCount + 1);
+    }
 
     try {
       const phase = getDiscussionPhase();
-      const text = await generateAIReply(char, state.topic, state.jobTitle, messages, phase, summaryGuided, summaryVolunteered);
+      // 传递当前要点信息
+      const currentKeyPoint = keyPointsRef.current.length > 0 && currentKeyPointIndexRef.current < keyPointsRef.current.length
+        ? keyPointsRef.current[currentKeyPointIndexRef.current]
+        : null;
+      const keyPointDiscussionCount = keyPointDiscussionCountRef.current;
+      const allKeyPointsDiscussed = keyPointsRef.current.length > 0 && currentKeyPointIndexRef.current >= keyPointsRef.current.length;
+      
+      const text = await generateAIReply(
+        char, 
+        state.topic, 
+        state.jobTitle, 
+        messages, 
+        phase, 
+        summaryGuided, 
+        summaryVolunteered,
+        currentKeyPoint,
+        keyPointDiscussionCount,
+        allKeyPointsDiscussed,
+        keyPointsRef.current,
+        currentKeyPointIndexRef.current
+      );
       
       // 检查是否是枢纽型引导总结
       if (char.role === 'STRUCTURED' && phase.includes('总结') && !summaryGuided) {
@@ -255,10 +373,34 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
       
       // 等待说话时间，然后显示消息
       setTimeout(() => {
-        setIsTyping(false);
-        addMessage(char.id, char.name, text);
-        setActiveCharId(null);
+      setIsTyping(false);
+      addMessage(char.id, char.name, text);
+      setActiveCharId(null);
+      
+      // 检查是否引导到下一个要点
+      if (keyPointsRef.current.length > 0 && currentKeyPointIndexRef.current < keyPointsRef.current.length) {
+        const currentKeyPoint = keyPointsRef.current[currentKeyPointIndexRef.current];
+        // 检查发言中是否包含引导到下一个要点的内容
+        const hasGuidanceToNext = (text.includes('接下来') || text.includes('现在') || text.includes('应该') || text.includes('进入')) &&
+                                   (text.includes('讨论') || text.includes('规划') || text.includes('设计') || text.includes('分析'));
         
+        // 检查是否达到当前要点的讨论上限，或者明确引导到下一个要点
+        if (keyPointDiscussionCountRef.current >= MAX_DISCUSSIONS_PER_KEY_POINT || hasGuidanceToNext) {
+          // 检查是否还有下一个要点
+          if (currentKeyPointIndexRef.current + 1 < keyPointsRef.current.length) {
+            // 移动到下一个要点
+            currentKeyPointIndexRef.current += 1;
+            keyPointDiscussionCountRef.current = 0;
+            setCurrentKeyPointIndex(currentKeyPointIndexRef.current);
+            setKeyPointDiscussionCount(0);
+          } else {
+            // 所有要点都已讨论完
+            currentKeyPointIndexRef.current = keyPointsRef.current.length;
+            setCurrentKeyPointIndex(currentKeyPointIndexRef.current);
+          }
+        }
+      }
+
         // 如果完成了总结汇报，标记为完成
         if (summaryVolunteered && text.length > 100) {
           setSummaryCompleted(true);
@@ -269,24 +411,72 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
         const lastMessage = messages[messages.length - 1];
         const isUserLastSpeaker = lastMessage && lastMessage.senderId === 'user';
         
+        // 检查讨论历史中是否有用户发言（检查最近5条消息）
+        const recentMessages = messages.slice(-5);
+        const hasUserInRecentHistory = recentMessages.some(m => m.senderId === 'user');
+        const userMessageIndex = recentMessages.findIndex(m => m.senderId === 'user');
+        const lastUserMessage = userMessageIndex >= 0 ? recentMessages[userMessageIndex] : null;
+        
+        // 使用ref来跟踪，确保在异步回调中能正确访问
+        const currentLastUserTime = userMessageTimeRef.current;
+        const currentMaxCount = maxAiResponseCountRef.current;
+        
+        // 更新AI发言计数
+        if (currentLastUserTime !== null && currentMaxCount > 0) {
+          aiResponseCountRef.current += 1;
+        }
+        
+        // 检查是否在用户两次发言之间
+        if (currentLastUserTime !== null && currentMaxCount > 0) {
+          // 如果已经达到最大次数，不再继续（包括所有AI发言逻辑）
+          if (aiResponseCountRef.current >= currentMaxCount) {
+            return; // 已经达到最大次数，不再继续
+          }
+          
+          // 如果还有剩余的AI发言次数（由用户发言触发），继续触发AI发言
+          if (userMessageTime !== null && maxCount > 0 && userMessageTime === currentLastUserTime) {
+            if (aiResponseCountRef.current < maxCount) {
+              const delay = 1500 + Math.random() * 1500; // 1.5-3秒间隔
+              setTimeout(() => {
+                const nextChar = getBalancedNextSpeaker(char.id);
+                triggerAITurn(nextChar, maxCount, userMessageTime);
+              }, delay);
+              return; // 继续AI连续发言，不执行其他逻辑
+            } else {
+              // 已经达到最大次数，不再继续
+              return;
+            }
+          }
+        }
+        
         if (isUserLastSpeaker) {
-          // 如果上一个发言者是用户，AI必须回应（100%概率）
-          // 但当前AI已经发言了，所以不需要再触发
-          // 这个逻辑已经在用户发言后的handleSendMessage中处理了
+          // 如果上一个发言者是用户，但已经没有剩余的AI发言次数
+          // 不再自动触发AI，让用户有机会再次发言
         } else {
           // 如果枢纽型引导了总结，下一个发言者应该自荐汇报
           if (summaryGuided && !summaryVolunteered) {
             // 枢纽型引导后，下一个发言者（可以是用户或AI）应该自荐汇报
-            // 如果用户没有发言，AI会在后续自动发言时自荐
-            // 这里给一个较短的延迟，让AI有机会自荐
+            // 但需要检查是否在用户两次发言之间
+            if (currentLastUserTime !== null && currentMaxCount > 0) {
+              if (aiResponseCountRef.current >= currentMaxCount) {
+                return; // 已经达到最大次数，不再继续
+              }
+            }
             const delay = 1500 + Math.random() * 1000;
             setTimeout(() => {
               const nextChar = getBalancedNextSpeaker(char.id);
-              triggerAITurn(nextChar);
+              triggerAITurn(nextChar, currentMaxCount, currentLastUserTime);
             }, delay);
           } else {
             // 如果上一个发言者是AI，有一定概率由另一位AI响应
-            const shouldChain = Math.random() < 0.3; // 降低AI之间的连续对话概率
+            // 但需要确保不超过用户发言后的最大次数
+            if (currentLastUserTime !== null && currentMaxCount > 0) {
+              if (aiResponseCountRef.current >= currentMaxCount) {
+                return; // 已经达到最大次数，不再继续
+              }
+            }
+            
+            const shouldChain = Math.random() < 0.5; // AI之间的连续对话概率为50%
             if (shouldChain && round < MAX_ROUNDS) {
               // 添加合理的间隔：最小1.5秒，最大3秒，避免连续快速发言
               const minInterval = 1500;
@@ -294,7 +484,7 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
               const delay = minInterval + Math.random() * (maxInterval - minInterval);
               setTimeout(() => {
                 const nextChar = getBalancedNextSpeaker(char.id);
-                triggerAITurn(nextChar);
+                triggerAITurn(nextChar, currentMaxCount, currentLastUserTime);
               }, delay);
             }
           }
@@ -359,6 +549,7 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
     }
 
     const messageContent = inputValue.trim();
+    const userMessageId = Date.now().toString();
     addMessage('user', USER_INFO.name, messageContent);
     setInputValue("");
     
@@ -367,27 +558,72 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
       setSummaryVolunteered(true);
     }
     
-    // 用户发言后，必须确保有AI回应（强制响应，确保互动）
+    // 检查是否引导到下一个要点（用户发言也可能引导）
+    if (keyPointsRef.current.length > 0 && currentKeyPointIndexRef.current < keyPointsRef.current.length) {
+      const currentKeyPoint = keyPointsRef.current[currentKeyPointIndexRef.current];
+      // 检查发言中是否包含引导到下一个要点的内容
+      const hasGuidanceToNext = (messageContent.includes('接下来') || messageContent.includes('现在') || messageContent.includes('应该') || messageContent.includes('进入')) &&
+                                 (messageContent.includes('讨论') || messageContent.includes('规划') || messageContent.includes('设计') || messageContent.includes('分析'));
+      
+      // 检查是否达到当前要点的讨论上限，或者明确引导到下一个要点
+      if (keyPointDiscussionCountRef.current >= MAX_DISCUSSIONS_PER_KEY_POINT || hasGuidanceToNext) {
+        // 检查是否还有下一个要点
+        if (currentKeyPointIndexRef.current + 1 < keyPointsRef.current.length) {
+          // 移动到下一个要点
+          currentKeyPointIndexRef.current += 1;
+          keyPointDiscussionCountRef.current = 0;
+          setCurrentKeyPointIndex(currentKeyPointIndexRef.current);
+          setKeyPointDiscussionCount(0);
+        } else {
+          // 所有要点都已讨论完
+          currentKeyPointIndexRef.current = keyPointsRef.current.length;
+          setCurrentKeyPointIndex(currentKeyPointIndexRef.current);
+        }
+      }
+    }
+    
+    // 用户发言后，随机触发1-3个AI角色发言，使发言更自然随机
     // 根据用户发言长度计算合理的等待时间，让AI在用户说完后自然回应
     const userMessageLength = messageContent.length;
     const userSpeakingTime = Math.max(800, Math.min(4000, (userMessageLength / 2.8) * 1000));
     
     // 如果用户自荐了汇报，AI应该等待或补充，延迟稍长
     const isUserVolunteered = summaryVolunteered && (messageContent.includes('我来总结') || messageContent.includes('我来汇报'));
-    const responseDelay = isUserVolunteered 
+    const baseResponseDelay = isUserVolunteered 
       ? userSpeakingTime + 2000 + Math.random() * 1000  // 用户汇报后，AI稍等再补充
       : userSpeakingTime + 1000 + Math.random() * 1000; // 正常回应时间
     
+    // 随机决定AI发言次数（1-2个）
+    // 概率分布：1次(50%)，2次(50%)
+    const rand = Math.random();
+    let maxCount;
+    if (rand < 0.5) {
+      maxCount = 1; // 50%概率1次
+    } else {
+      maxCount = 2; // 50%概率2次
+    }
+    
+    // 记录用户发言时间（使用消息id）和允许的最大AI发言次数
+    const userMessageTime = parseInt(userMessageId);
+    setLastUserMessageTime(userMessageTime);
+    setAiResponseCountAfterUser(0);
+    setMaxAiResponseCount(maxCount);
+    
+    // 使用ref跟踪，确保在异步回调中能正确访问
+    userMessageTimeRef.current = userMessageTime;
+    maxAiResponseCountRef.current = maxCount;
+    aiResponseCountRef.current = 0;
+    
+    // 第一个AI发言
     setTimeout(() => {
-      // 优先选择能回应用户的AI，确保互动
       const nextChar = getBalancedNextSpeaker('user');
-      triggerAITurn(nextChar);
-    }, responseDelay);
+      triggerAITurn(nextChar, maxCount, userMessageTime); // 传递最大次数和用户发言时间
+    }, baseResponseDelay);
   };
 
   return (
     <div className="flex h-full bg-slate-50 overflow-hidden relative">
-      <div className={`flex flex-col flex-1 transition-all duration-500 ease-in-out ${showTopic ? 'lg:mr-80' : 'mr-0'}`}>
+      <div className={`flex flex-col flex-1 transition-all duration-500 ease-in-out ${showTopic ? 'mr-80' : 'mr-0'}`}>
         <div className="bg-white border-b p-4 shadow-sm z-10">
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center gap-3">
@@ -420,9 +656,9 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
             {CHARACTERS.map(c => (
               <CharacterCard key={c.id} character={c} isActive={activeCharId === c.id} isTyping={activeCharId === c.id && isTyping} />
             ))}
-            <div className="flex flex-col items-center p-3 rounded-xl bg-white shadow-sm border-2 border-slate-100 min-w-[85px]">
-               <img src={USER_INFO.avatar} alt={USER_INFO.name} className="w-12 h-12 rounded-full border-2 border-indigo-300" />
-               <span className="mt-2 text-[10px] font-bold text-slate-700">{USER_INFO.displayName}</span>
+            <div className="flex flex-col items-center p-3 rounded-xl bg-indigo-100 shadow-sm border-2 border-indigo-300 min-w-[85px]">
+               <img src={USER_INFO.avatar} alt={USER_INFO.name} className="w-14 h-14 rounded-full border-2 border-indigo-300" />
+               <span className="mt-2 text-xs font-semibold text-slate-700">{USER_INFO.displayName}</span>
             </div>
           </div>
         </div>
@@ -497,7 +733,7 @@ const DiscussionPanel: React.FC<DiscussionPanelProps> = ({ state, onFinish }) =>
         </div>
       </div>
 
-      <div className={`fixed lg:absolute top-0 right-0 h-full w-80 bg-white border-l border-slate-200 shadow-2xl z-20 transition-transform duration-500 ease-in-out transform ${showTopic ? 'translate-x-0' : 'translate-x-full'}`}>
+      <div className={`absolute top-0 right-0 h-full w-80 bg-white border-l border-slate-200 shadow-2xl z-20 transition-transform duration-500 ease-in-out transform ${showTopic ? 'translate-x-0' : 'translate-x-full'}`}>
         <button 
           onClick={() => setShowTopic(!showTopic)}
           className={`absolute left-[-32px] top-1/2 -translate-y-1/2 w-8 h-20 bg-white border border-r-0 border-slate-200 rounded-l-2xl flex items-center justify-center shadow-[-8px_0_15px_-3px_rgba(0,0,0,0.05)] hover:text-indigo-600 transition-colors z-30`}
