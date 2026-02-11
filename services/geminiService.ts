@@ -86,6 +86,95 @@ async function callDeepSeekAPI(prompt: string, temperature: number = 0.7): Promi
   }
 }
 
+/**
+ * 获取 DeepSeek API Key（与 callDeepSeekAPI 一致）
+ */
+function getDeepSeekApiKey(): string {
+  let apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey && typeof window !== 'undefined' && (window as any).__DEEPSEEK_API_KEY__) {
+    apiKey = (window as any).__DEEPSEEK_API_KEY__;
+  }
+  if (!apiKey) {
+    console.warn('⚠️ 环境变量未设置，使用硬编码的 API Key（仅用于开发测试）');
+    apiKey = 'sk-84606ff70f2d44f992e1d3cce2851818';
+  }
+  if (!apiKey) {
+    throw new Error("DEEPSEEK_API_KEY 环境变量未设置");
+  }
+  return apiKey;
+}
+
+/**
+ * 流式调用 DeepSeek API，通过 onChunk 逐段回调内容
+ * @param prompt - 输入的提示词
+ * @param temperature - 温度参数
+ * @param onChunk - 每收到一段内容时调用
+ * @returns 累积的完整文本
+ */
+async function callDeepSeekAPIStream(
+  prompt: string,
+  temperature: number,
+  onChunk: (chunk: string) => void
+): Promise<string> {
+  const apiKey = getDeepSeekApiKey();
+  const response = await fetch(DEEPSEEK_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: DEEPSEEK_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      temperature,
+      stream: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "未知错误");
+    throw new Error(`DeepSeek API 请求失败: ${response.status} ${response.statusText} - ${errorText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("DeepSeek API 响应体不可读");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") return full;
+          try {
+            const data = JSON.parse(payload);
+            const content = data.choices?.[0]?.delta?.content;
+            if (typeof content === "string") {
+              full += content;
+              onChunk(content);
+            }
+          } catch {
+            // 忽略单条解析失败
+          }
+        }
+      }
+    }
+    return full;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function generateAIReply(
   character: Character,
   topic: string,
@@ -765,6 +854,65 @@ export async function generateTopic(company: string, jobTitle: string): Promise<
     console.error("生成题目失败:", error);
     // 返回友好的错误提示，保持与原代码一致的错误处理
     return "题目生成失败，请手动输入。";
+  }
+}
+
+/**
+ * 流式生成群面题目，每收到一段内容即通过 onChunk 回调；流结束后返回清理后的完整文本
+ */
+export async function generateTopicStream(
+  company: string,
+  jobTitle: string,
+  onChunk: (chunk: string) => void
+): Promise<string> {
+  const prompt = `你是一位资深的${company}面试官，正在为${jobTitle}岗位设计群面题目。
+
+请深入分析${company}的业务特点、行业定位、核心产品/服务，以及${jobTitle}岗位在该公司的实际工作场景和核心职责。基于这些信息，设计一个高度贴合、具有实战性的群面题目。
+
+题目要求严格按照以下格式输出：
+
+一、背景
+（仅用一个段落描述${company}某个具体业务组或项目当前遇到的真实业务困境和挑战。背景必须：
+- 紧密结合${company}的实际业务场景（如${company}的核心产品、服务模式、用户群体等）
+- 体现${jobTitle}岗位在该公司可能面临的典型工作场景
+- 描述具体的业务问题，而非抽象概念
+- 不要涉及公司整体战略、产品线架构、时代背景等宏观内容
+- 聚焦一个具体的业务困境，让讨论有明确的解决目标）
+
+二、问题
+请你们在小组讨论中，设计出解决方案框架。方案需包含以下核心要点：
+1、关键动作或讨论要点一（简短明确，与${jobTitle}岗位核心能力相关）
+2、关键动作或讨论要点二（简短明确，与${jobTitle}岗位核心能力相关）
+3、关键动作或讨论要点三（简短明确，与${jobTitle}岗位核心能力相关）
+4、关键动作或讨论要点四（简短明确，与${jobTitle}岗位核心能力相关）
+
+要求：每个要点要简短明确，只说明关键动作和要讨论的要点、角度即可，不要冗长描述。
+
+三、时间分配
+1、阅读材料：X分钟。
+2、小组讨论：X分钟。
+3、总结汇报：X分钟。
+
+重要要求：
+- 使用中文数字"一、二、三"作为一级标题
+- 使用阿拉伯数字"1、2、3"作为二级标题
+- 禁止使用Markdown格式（不要使用#、**、*等符号）
+- 直接使用纯文字分段输出
+- 背景部分必须控制在1个段落内，要真实反映${company}的业务特点和${jobTitle}的工作场景
+- 问题部分的4个要点要简短明确，只说明关键动作和要讨论的要点、角度即可，不要冗长描述
+- 每个要点控制在10-15字以内，例如："用户需求分析"、"运营策略设计"、"技术方案评估"等
+- 问题部分的4个要点必须针对${jobTitle}岗位的核心能力要求，体现该岗位在${company}的实际工作职责
+- 题目要有实战性，避免过于理论化或抽象化
+- 时间分配要合理，总时长控制在30-40分钟
+
+请确保题目充分体现${company}的业务特色和${jobTitle}岗位的专业要求，让候选人能够展示与岗位高度匹配的能力。`;
+
+  try {
+    const full = await callDeepSeekAPIStream(prompt, 0.7, onChunk);
+    return full.replace(/[*#`>]/g, '').trim() || "题目生成失败，请手动输入。";
+  } catch (error) {
+    console.error("生成题目失败:", error);
+    throw error;
   }
 }
 

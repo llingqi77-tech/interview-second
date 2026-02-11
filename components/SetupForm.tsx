@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { generateTopic } from '../services/geminiService';
+import { generateTopicStream } from '../services/geminiService';
 
 interface SetupFormProps {
   onStart: (topic: string, jobTitle: string, company: string) => void;
@@ -18,9 +18,12 @@ const SetupForm: React.FC<SetupFormProps> = ({ onStart }) => {
       return;
     }
     setIsGenerating(true);
+    setTopic("");
     try {
-      const result = await generateTopic(company, jobTitle);
-      setTopic(result);
+      const cleaned = await generateTopicStream(company, jobTitle, (chunk) =>
+        setTopic((prev) => prev + chunk)
+      );
+      setTopic(cleaned);
     } catch (error) {
       console.error(error);
       alert("生成失败，请稍后重试。");
@@ -109,7 +112,7 @@ const SetupForm: React.FC<SetupFormProps> = ({ onStart }) => {
             <label className="block text-sm font-bold text-slate-700">群面讨论题目</label>
           </div>
           
-          <div className={`relative rounded-3xl overflow-hidden border-2 transition-all flex-1 flex flex-col ${topic ? 'border-indigo-200 bg-white shadow-inner' : 'border-slate-100 bg-slate-50'}`}>
+          <div className={`relative rounded-3xl overflow-hidden transition-all flex-1 flex flex-col ${topic ? 'bg-white shadow-inner' : 'bg-slate-50'}`}>
             <textarea 
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
@@ -117,13 +120,16 @@ const SetupForm: React.FC<SetupFormProps> = ({ onStart }) => {
               className="w-full h-full px-6 py-6 text-slate-900 bg-transparent focus:outline-none transition-all resize-none text-base leading-relaxed font-medium placeholder:text-slate-400"
               required
             />
-            {isGenerating && (
-              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center">
+            {isGenerating && topic === "" && (
+              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center pointer-events-none">
                 <div className="flex flex-col items-center gap-3">
-                   <div className="w-10 h-10 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
-                   <span className="text-sm font-bold text-slate-600">面试官出题中...</span>
+                  <div className="w-10 h-10 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin"></div>
+                  <span className="text-sm font-bold text-slate-600">面试官出题中...</span>
                 </div>
               </div>
+            )}
+            {isGenerating && topic !== "" && (
+              <div className="absolute bottom-4 right-4 text-xs text-slate-500 font-medium">正在生成…</div>
             )}
           </div>
         </div>
